@@ -120,7 +120,8 @@ runs:
               "input": {
                 "error": $ERROR_FLAG,
                 "projectUuid": "${{ env.WOPEE_PROJECT_UUID }}",
-                "suiteUuid": "${{ env.WOPEE_SUITE_UUID }}"
+                "suiteUuid": "${{ env.WOPEE_SUITE_UUID }}",
+                "agentReport": ${{ env.WOPEE_AGENT_REPORT }}
               }
             }
           }
