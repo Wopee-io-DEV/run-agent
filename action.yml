@@ -73,9 +73,25 @@ runs:
           echo "WOPEE_USER_STORY_ID=${{ github.event.client_payload.testCase.userStoryId }}" >> $GITHUB_ENV
         fi
 
+    - name: Setup XVFB for headed mode
+      if: env.HEADED == 'true'
+      shell: bash
+      run: |
+        if ! command -v xvfb-run &>/dev/null; then
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb 2>/dev/null \
+            || apt-get update -qq && apt-get install -y -qq xvfb 2>/dev/null \
+            || echo "⚠️ Could not install xvfb — headed mode may fail"
+        fi
+
     - name: Run agent
       shell: bash
-      run: wopee_agent
+      run: |
+        if [ "$HEADED" = "true" ] && command -v xvfb-run &>/dev/null; then
+          echo "🖥️ Running in headed mode with XVFB"
+          xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' wopee_agent
+        else
+          wopee_agent
+        fi
 
     - name: Upload test results
       if: always()
