@@ -107,65 +107,106 @@ runs:
     - name: Export Test Report to WOPEE_AGENT_REPORT
       shell: bash
       run: |
+        set -euo pipefail
+    
         if [ -f "/tmp/test-results/report.md" ]; then
-          REPORT_CONTENT=$(jq -Rs . /tmp/test-results/report.md)
+          REPORT_CONTENT="$(cat /tmp/test-results/report.md)"
           cat /tmp/test-results/report.md
-          echo $REPORT_CONTENT
-          echo "WOPEE_AGENT_REPORT=$REPORT_CONTENT" >> $GITHUB_ENV
         else
-          echo "⚠️ /tmp/test-results/report.md not found"
+          REPORT_CONTENT="Agent report not found at /tmp/test-results/report.md"
+          echo "⚠️ $REPORT_CONTENT"
         fi
-
+    
+        {
+          echo "WOPEE_AGENT_REPORT<<EOF"
+          echo "$REPORT_CONTENT"
+          echo "EOF"
+        } >> "$GITHUB_ENV"
+    
     - name: echo report
       shell: bash
       run: |
-        echo $WOPEE_AGENT_REPORT
-
+        printf '%s\n' "${WOPEE_AGENT_REPORT:-}"
+    
     - name: Post-process suites if agent did not run
       if: failure() && steps.run_agent.outcome != 'success'
-
       shell: bash
       run: |
-        ERROR_FLAG=true
+        set -euo pipefail
 
-        if [ "${{ github.event.action }}" = "crawl" ]; then
-          JSON_PAYLOAD=$(cat <<-EOF
-          {
-            "query": "mutation PostProcessAnalysisSuite(\$input: PostProcessAnalysisSuiteInput!) { postProcessAnalysisSuite(input: \$input) }",
-            "variables": {
-              "input": {
-                "error": $ERROR_FLAG,
-                "projectUuid": "${{ env.WOPEE_PROJECT_UUID }}",
-                "suiteUuid": "${{ env.WOPEE_SUITE_UUID }}",
-                "agentReport": ${{ env.WOPEE_AGENT_REPORT }}
-              }
-            }
-          }
-        EOF
-          )
-        else
-          JSON_PAYLOAD=$(cat <<-EOF
-          {
-            "query": "mutation PostProcessAgentSuite(\$input: PostProcessAgentSuiteInput!) { postProcessAgentSuite(input: \$input) }",
-            "variables": {
-              "input": {
-                "error": $ERROR_FLAG,
-                "projectUuid": "${{ env.WOPEE_PROJECT_UUID }}",
-                "suiteUuid": "${{ env.WOPEE_SUITE_UUID }}",
-                "agentReport": ${{ env.WOPEE_AGENT_REPORT }},
-                "testCase": {
-                  "testCaseId": "${{ env.WOPEE_TEST_CASE_ID }}",
-                  "userStoryId": "${{ env.WOPEE_USER_STORY_ID }}"
-                }
-              }
-            }
-          }
-        EOF
-          )
+        if [ -z "${WOPEE_API_URL:-}" ] || [ -z "${WOPEE_API_KEY:-}" ]; then
+          echo "WARNING: WOPEE_API_URL or WOPEE_API_KEY is missing; skipping fallback post-process"
+          exit 0
         fi
 
-        curl --request POST \
-          --header 'content-type: application/json' \
-          --header 'api_key: ${{ env.WOPEE_API_KEY }}' \
-          --url '${{ env.WOPEE_API_URL }}' \
+        ERROR_FLAG=true
+        AGENT_REPORT_STATUS="FAILED"
+        AGENT_LOG_JSON="[]"
+        CODE_STEPS_TEXT=""
+
+        QUERY_ANALYSIS='mutation PostProcessAnalysisSuite($input: PostProcessAnalysisSuiteInput!) { postProcessAnalysisSuite(input: $input) }'
+        QUERY_AGENT='mutation PostProcessAgentSuite($input: PostProcessAgentSuiteInput!) { postProcessAgentSuite(input: $input) { postProcessing codeGeneration { status message } testCaseStepsGeneration { status message } errorMessage } }'
+
+        HAS_IDENTIFIER=false
+        IDENTIFIER=""
+        if [ -n "${WOPEE_USER_STORY_ID:-}" ] && [ -n "${WOPEE_TEST_CASE_ID:-}" ]; then
+          IDENTIFIER="${WOPEE_USER_STORY_ID}:${WOPEE_TEST_CASE_ID}"
+          HAS_IDENTIFIER=true
+        fi
+
+        if [ "${{ github.event.action }}" = "crawl" ] || [ "$HAS_IDENTIFIER" != "true" ]; then
+          JSON_PAYLOAD="$(jq -n \
+            --arg query "$QUERY_ANALYSIS" \
+            --arg projectUuid "${WOPEE_PROJECT_UUID:-}" \
+            --arg suiteUuid "${WOPEE_SUITE_UUID:-}" \
+            --arg agentReport "${WOPEE_AGENT_REPORT:-}" \
+            --arg agentReportStatus "$AGENT_REPORT_STATUS" \
+            --argjson error "$ERROR_FLAG" \
+            '{
+              query: $query,
+              variables: {
+                input: {
+                  error: $error,
+                  projectUuid: $projectUuid,
+                  suiteUuid: $suiteUuid,
+                  agentReport: $agentReport,
+                  agentReportStatus: $agentReportStatus
+                }
+              }
+            }'
+          )"
+        else
+          JSON_PAYLOAD="$(jq -n \
+            --arg query "$QUERY_AGENT" \
+            --arg projectUuid "${WOPEE_PROJECT_UUID:-}" \
+            --arg suiteUuid "${WOPEE_SUITE_UUID:-}" \
+            --arg identifier "$IDENTIFIER" \
+            --arg agentReport "${WOPEE_AGENT_REPORT:-}" \
+            --arg agentReportStatus "$AGENT_REPORT_STATUS" \
+            --arg agentLog "$AGENT_LOG_JSON" \
+            --arg codeSteps "$CODE_STEPS_TEXT" \
+            --argjson error "$ERROR_FLAG" \
+            '{
+              query: $query,
+              variables: {
+                input: {
+                  error: $error,
+                  projectUuid: $projectUuid,
+                  suiteUuid: $suiteUuid,
+                  identifier: $identifier,
+                  agentReport: $agentReport,
+                  agentReportStatus: $agentReportStatus,
+                  agentLog: $agentLog,
+                  codeSteps: $codeSteps
+                }
+              }
+            }'
+          )"
+        fi
+
+        curl --fail-with-body --silent --show-error \
+          --request POST \
+          --header "content-type: application/json" \
+          --header "api_key: ${WOPEE_API_KEY}" \
+          --url "${WOPEE_API_URL}" \
           --data "$JSON_PAYLOAD"
