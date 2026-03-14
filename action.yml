@@ -14,6 +14,7 @@ runs:
       run: |
         echo "WOPEE_SCREENSHOT_VALIDATION_ENABLED=${WOPEE_SCREENSHOT_VALIDATION_ENABLED:-true}" >> $GITHUB_ENV
         echo "WOPEE_COLLECT_PAGE_CONTENT=${WOPEE_COLLECT_PAGE_CONTENT:-true}" >> $GITHUB_ENV
+        echo "WOPEE_AGENT_WORK_DIR=${WOPEE_AGENT_WORK_DIR:-/tmp/agent}" >> $GITHUB_ENV
 
     - name: Load client_payload.env → $GITHUB_ENV
       if: github.event.client_payload.env
@@ -100,8 +101,8 @@ runs:
       with:
         name: playwright-results
         path: |
-          /tmp/test-results
-          /tmp/playwright-report
+          ${{ env.WOPEE_AGENT_WORK_DIR }}/test-results
+          ${{ env.WOPEE_AGENT_WORK_DIR }}/playwright-report
         retention-days: 1
 
     - name: Export Test Report to WOPEE_AGENT_REPORT
@@ -109,11 +110,12 @@ runs:
       run: |
         set -euo pipefail
     
-        if [ -f "/tmp/test-results/report.md" ]; then
-          REPORT_CONTENT="$(cat /tmp/test-results/report.md)"
-          cat /tmp/test-results/report.md
+        REPORT_PATH="${WOPEE_AGENT_WORK_DIR}/test-results/report.md"
+        if [ -f "$REPORT_PATH" ]; then
+          REPORT_CONTENT="$(cat "$REPORT_PATH")"
+          cat "$REPORT_PATH"
         else
-          REPORT_CONTENT="Agent report not found at /tmp/test-results/report.md"
+          REPORT_CONTENT="Agent report not found at $REPORT_PATH"
           echo "⚠️ $REPORT_CONTENT"
         fi
     
