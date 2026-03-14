@@ -14,6 +14,7 @@ runs:
       run: |
         echo "WOPEE_SCREENSHOT_VALIDATION_ENABLED=${WOPEE_SCREENSHOT_VALIDATION_ENABLED:-true}" >> $GITHUB_ENV
         echo "WOPEE_COLLECT_PAGE_CONTENT=${WOPEE_COLLECT_PAGE_CONTENT:-true}" >> $GITHUB_ENV
+        echo "WOPEE_AGENT_WORK_DIR=${WOPEE_AGENT_WORK_DIR:-/tmp/agent}" >> $GITHUB_ENV
 
     - name: Load client_payload.env → $GITHUB_ENV
       if: github.event.client_payload.env
@@ -99,18 +100,19 @@ runs:
       with:
         name: playwright-results
         path: |
-          /tmp/test-results
-          /tmp/playwright-report
+          ${{ env.WOPEE_AGENT_WORK_DIR }}/test-results
+          ${{ env.WOPEE_AGENT_WORK_DIR }}/playwright-report
         retention-days: 1
 
     - name: Export Test Report to WOPEE_AGENT_REPORT
       shell: bash
       run: |
-        if [ -f "test-results/report.md" ]; then
-          REPORT_CONTENT=$(cat test-results/report.md | sed ':a;N;$!ba;s/\n/\\n/g' | sed 's/"/\\"/g')
+        REPORT_PATH="${WOPEE_AGENT_WORK_DIR}/test-results/report.md"
+        if [ -f "$REPORT_PATH" ]; then
+          REPORT_CONTENT=$(cat "$REPORT_PATH" | sed ':a;N;$!ba;s/\n/\\n/g' | sed 's/"/\\"/g')
           echo "WOPEE_AGENT_REPORT=\"$REPORT_CONTENT\"" >> $GITHUB_ENV
         else
-          echo "⚠️ test-results/report.md not found"
+          echo "⚠️ $REPORT_PATH not found"
         fi
 
     - name: Confirm end of run
