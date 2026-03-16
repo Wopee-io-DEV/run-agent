@@ -40,6 +40,11 @@ runs:
             >> "$GITHUB_ENV" || true
         fi
 
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+
     - name: Install dependencies
       shell: bash
       run: |
