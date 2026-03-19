@@ -88,6 +88,7 @@ runs:
       id: run_agent
       shell: bash
       run: |
+        env | grep '^WOPEE_' | sort || echo "No WOPEE_ variables found"
         if [ "$HEADED" = "true" ] && command -v xvfb-run &>/dev/null; then
           echo "🖥️ Running in headed mode with XVFB"
           xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' wopee_agent
