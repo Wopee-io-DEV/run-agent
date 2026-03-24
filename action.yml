@@ -9,6 +9,83 @@ runs:
   steps:
     - uses: actions/checkout@v4
 
+    - name: "[diag] Snapshot WOPEE_ env vars and runtime image"
+      shell: bash
+      run: |
+        echo "::group::WOPEE_ environment variables (initial)"
+        env | grep '^WOPEE_' | sort > /tmp/wopee_env_initial.txt
+        cat /tmp/wopee_env_initial.txt || echo "(none)"
+        echo "::endgroup::"
+
+        echo "::group::Runtime image info"
+        # Image the container was started from
+        if [ -f /etc/os-release ]; then
+          echo "--- /etc/os-release ---"
+          cat /etc/os-release
+        fi
+        # Docker image ID baked into the container (if available)
+        if [ -f /.docker-image-id ]; then
+          echo "--- /.docker-image-id ---"
+          cat /.docker-image-id
+        fi
+        # wopee_agent binary metadata
+        if command -v wopee_agent &>/dev/null; then
+          AGENT_BIN=$(command -v wopee_agent)
+          echo "wopee_agent path: $AGENT_BIN"
+          echo "wopee_agent mtime: $(stat -c '%y' "$AGENT_BIN" 2>/dev/null || stat -f '%Sm' "$AGENT_BIN" 2>/dev/null || echo 'unknown')"
+          echo "wopee_agent sha256: $(sha256sum "$AGENT_BIN" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$AGENT_BIN" 2>/dev/null | cut -d' ' -f1 || echo 'unknown')"
+        else
+          echo "wopee_agent binary not found in PATH"
+        fi
+        # Container hostname as runner identifier
+        echo "hostname: $(hostname)"
+        echo "::endgroup::"
+
+        echo "::group::Container identity and resources"
+        echo "hostname: $(hostname)"
+        echo "runner name: ${RUNNER_NAME:-unknown}"
+        echo "container uptime: $(cut -d' ' -f1 /proc/uptime 2>/dev/null || echo 'unknown')s"
+        echo "disk usage (/tmp): $(df -h /tmp 2>/dev/null | tail -1 || echo 'unknown')"
+        echo "memory: $(free -m 2>/dev/null | grep Mem | awk '{print $3"/"$2" MB"}' || echo 'unknown')"
+        echo "::endgroup::"
+
+        echo "::group::Network and proxy"
+        echo "HTTP_PROXY=${HTTP_PROXY:-unset}"
+        echo "HTTPS_PROXY=${HTTPS_PROXY:-unset}"
+        echo "NO_PROXY=${NO_PROXY:-unset}"
+        curl -s -o /dev/null -w "github.com: HTTP %{http_code} in %{time_total}s\n" https://github.com 2>/dev/null || echo "github.com unreachable"
+        curl -s -o /dev/null -w "ghcr.io: HTTP %{http_code} in %{time_total}s\n" https://ghcr.io 2>/dev/null || echo "ghcr.io unreachable"
+        echo "::endgroup::"
+
+        echo "::group::GHCR latest image digest"
+        # Compare running image with latest available on GHCR
+        RUNTIME_IMAGE="${RUNTIME_IMAGE:-ghcr.io/wopee-io-dev/runtime}"
+        echo "RUNTIME_IMAGE=$RUNTIME_IMAGE"
+        # Local image ID (if docker is available inside the runner)
+        if command -v docker &>/dev/null; then
+          echo "--- local docker image ---"
+          docker images "$RUNTIME_IMAGE" --digests --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}} {{.CreatedAt}}' 2>/dev/null || echo "docker images not accessible"
+        fi
+        # Query GHCR for latest manifest digest via skopeo or curl
+        if command -v skopeo &>/dev/null; then
+          echo "--- skopeo inspect (remote) ---"
+          skopeo inspect "docker://${RUNTIME_IMAGE}:latest" 2>/dev/null | grep -E '"Digest"|"Created"' || echo "skopeo inspect failed"
+        else
+          echo "--- crane/curl manifest digest (remote) ---"
+          # Try unauthenticated GHCR manifest HEAD
+          GHCR_TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:${RUNTIME_IMAGE#ghcr.io/}:pull" 2>/dev/null | grep -o '"token":"[^"]*"' | cut -d'"' -f4) || true
+          if [ -n "$GHCR_TOKEN" ]; then
+            REMOTE_DIGEST=$(curl -s -H "Authorization: Bearer $GHCR_TOKEN" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+              -I "https://ghcr.io/v2/${RUNTIME_IMAGE#ghcr.io/}/manifests/latest" 2>/dev/null \
+              | grep -i 'docker-content-digest' | tr -d '\r' | awk '{print $2}')
+            echo "GHCR latest digest: ${REMOTE_DIGEST:-unable to fetch}"
+          else
+            echo "Could not obtain GHCR token"
+          fi
+        fi
+        echo "::endgroup::"
+
     - name: Set default values for environment variables
       shell: bash
       run: |
@@ -83,6 +160,89 @@ runs:
             || apt-get update -qq && apt-get install -y -qq xvfb 2>/dev/null \
             || echo "⚠️ Could not install xvfb — headed mode may fail"
         fi
+
+    - name: "[diag] Compare WOPEE_ env vars before agent execution"
+      shell: bash
+      run: |
+        echo "::group::WOPEE_ environment variables (pre-execution)"
+        env | grep '^WOPEE_' | sort > /tmp/wopee_env_pre_exec.txt
+        cat /tmp/wopee_env_pre_exec.txt
+        echo "::endgroup::"
+
+        echo "::group::WOPEE_ env diff (initial vs pre-execution)"
+        if [ -f /tmp/wopee_env_initial.txt ]; then
+          DIFF=$(diff /tmp/wopee_env_initial.txt /tmp/wopee_env_pre_exec.txt) || true
+          if [ -n "$DIFF" ]; then
+            echo "CHANGED variables detected:"
+            echo "$DIFF"
+          else
+            echo "No changes — all WOPEE_ variables are identical to initial snapshot."
+          fi
+        else
+          echo "Initial snapshot not found — skipping diff."
+        fi
+        echo "::endgroup::"
+
+        echo "::group::Agent work dir state"
+        WORK_DIR="${WOPEE_AGENT_WORK_DIR:-/tmp/agent}"
+        if [ -d "$WORK_DIR/.git" ]; then
+          echo "Git repo at: $WORK_DIR"
+          echo "Branch: $(git -C "$WORK_DIR" branch --show-current 2>/dev/null || echo 'unknown')"
+          echo "HEAD: $(git -C "$WORK_DIR" log -1 --format='%H %s' 2>/dev/null || echo 'unknown')"
+          echo "Remote URL: $(git -C "$WORK_DIR" remote get-url origin 2>/dev/null | sed 's|x-access-token:[^@]*@|x-access-token:REDACTED@|' || echo 'unknown')"
+          echo "Last fetch: $(stat -c '%y' "$WORK_DIR/.git/FETCH_HEAD" 2>/dev/null || echo 'never fetched')"
+        else
+          echo "$WORK_DIR is not a git repo (or does not exist yet)"
+        fi
+        echo "::endgroup::"
+
+        echo "::group::Agent code fingerprint"
+        if [ -d "$WORK_DIR" ]; then
+          echo "package.json version: $(jq -r '.version // "n/a"' "$WORK_DIR/package.json" 2>/dev/null || echo 'missing')"
+          echo "package-lock sha256: $(sha256sum "$WORK_DIR/package-lock.json" 2>/dev/null | cut -d' ' -f1 || echo 'missing')"
+          echo "Source tree hash: $(git -C "$WORK_DIR" rev-parse HEAD:src 2>/dev/null || echo 'unknown')"
+          echo "node_modules fingerprint: $(find "$WORK_DIR/node_modules" -name 'package.json' -maxdepth 2 -exec md5sum {} + 2>/dev/null | sort | md5sum | cut -d' ' -f1 || echo 'unknown')"
+        else
+          echo "$WORK_DIR does not exist"
+        fi
+        echo "::endgroup::"
+
+        echo "::group::Playwright browsers"
+        npx playwright --version 2>/dev/null || echo "playwright CLI not available"
+        ls -la ~/.cache/ms-playwright/ 2>/dev/null || echo "No browsers in default cache"
+        echo "::endgroup::"
+
+        echo "::group::Diagnostic fingerprint (JSON)"
+        AGENT_BIN_PATH="$(command -v wopee_agent 2>/dev/null || echo '')"
+        DIAG_JSON=$(jq -n \
+          --arg hostname "$(hostname)" \
+          --arg runner "${RUNNER_NAME:-unknown}" \
+          --arg agent_sha "$([ -n "$AGENT_BIN_PATH" ] && sha256sum "$AGENT_BIN_PATH" 2>/dev/null | cut -d' ' -f1 || echo 'unknown')" \
+          --arg head "$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo 'unknown')" \
+          --arg lockfile_sha "$(sha256sum "$WORK_DIR/package-lock.json" 2>/dev/null | cut -d' ' -f1 || echo 'unknown')" \
+          --arg pkg_version "$(jq -r '.version // "n/a"' "$WORK_DIR/package.json" 2>/dev/null || echo 'unknown')" \
+          --arg pw_version "$(npx playwright --version 2>/dev/null || echo 'unknown')" \
+          --arg uptime "$(cut -d' ' -f1 /proc/uptime 2>/dev/null || echo 'unknown')" \
+          --arg disk_free "$(df -h /tmp 2>/dev/null | tail -1 | awk '{print $4}' || echo 'unknown')" \
+          --arg mem_used "$(free -m 2>/dev/null | grep Mem | awk '{print $3"/"$2}' || echo 'unknown')" \
+          --arg last_fetch "$(stat -c '%y' "$WORK_DIR/.git/FETCH_HEAD" 2>/dev/null || echo 'never')" \
+          --arg env_vars_changed "$([ -f /tmp/wopee_env_initial.txt ] && diff -q /tmp/wopee_env_initial.txt /tmp/wopee_env_pre_exec.txt >/dev/null 2>&1 && echo 'false' || echo 'true')" \
+          --arg wopee_env "$(cat /tmp/wopee_env_pre_exec.txt 2>/dev/null || echo '')" \
+          --arg github_run_id "${GITHUB_RUN_ID:-unknown}" \
+          --arg github_run_url "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-0}" \
+          --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          '{timestamp: $timestamp, hostname: $hostname, runner: $runner, github_run_id: $github_run_id, github_run_url: $github_run_url, agent_binary_sha256: $agent_sha, git_head: $head, pkg_version: $pkg_version, lockfile_sha256: $lockfile_sha, playwright: $pw_version, uptime_sec: $uptime, disk_free: $disk_free, mem_mb: $mem_used, last_git_fetch: $last_fetch, env_vars_changed: $env_vars_changed, wopee_env: $wopee_env}')
+        echo "$DIAG_JSON"
+        echo "::endgroup::"
+
+        echo "::group::POST diagnostic fingerprint to webhook"
+        curl -s -o /dev/null -w "Webhook POST: HTTP %{http_code}\n" \
+          --request POST \
+          --header "content-type: application/json" \
+          --data "$DIAG_JSON" \
+          "https://hub.dev.wopee.io/webhook/cc8ece89-1349-4d95-a214-6e0f37214dca" \
+          || echo "Warning: webhook POST failed"
+        echo "::endgroup::"
 
     - name: Run agent
       id: run_agent
