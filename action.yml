@@ -191,9 +191,32 @@ runs:
           echo "Git repo at: $WORK_DIR"
           echo "Branch: $(git -C "$WORK_DIR" branch --show-current 2>/dev/null || echo 'unknown')"
           echo "HEAD: $(git -C "$WORK_DIR" log -1 --format='%H %s' 2>/dev/null || echo 'unknown')"
-          echo "Remote URL: $(git -C "$WORK_DIR" remote get-url origin 2>/dev/null | sed 's|x-access-token:[^@]*@|x-access-token:REDACTED@|' || echo 'unknown')"
+          GIT_REMOTE_URL=$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null | sed 's|x-access-token:[^@]*@|x-access-token:REDACTED@|' || echo 'unknown')
+          echo "Remote URL: $GIT_REMOTE_URL"
           echo "Last fetch: $(stat -c '%y' "$WORK_DIR/.git/FETCH_HEAD" 2>/dev/null || echo 'never fetched')"
+          echo "--- git extraheader config ---"
+          git -C "$WORK_DIR" config --local --get-all http.https://github.com/.extraheader 2>/dev/null | sed 's/AUTHORIZATION: basic .*/AUTHORIZATION: basic [REDACTED]/' || echo "(none)"
+          echo "--- git reflog (last 5) ---"
+          git -C "$WORK_DIR" reflog --format='%h %gd %gs' -5 2>/dev/null || echo "(no reflog)"
+          echo "--- origin/main vs HEAD ---"
+          ORIGIN_MAIN=$(git -C "$WORK_DIR" rev-parse origin/main 2>/dev/null || echo 'unknown')
+          LOCAL_HEAD=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo 'unknown')
+          echo "origin/main: $ORIGIN_MAIN"
+          echo "HEAD:        $LOCAL_HEAD"
+          if [ "$ORIGIN_MAIN" != "$LOCAL_HEAD" ]; then
+            echo "MISMATCH: HEAD is behind or diverged from origin/main"
+            git -C "$WORK_DIR" log --oneline "$LOCAL_HEAD..$ORIGIN_MAIN" 2>/dev/null | head -5 || true
+          fi
+          echo "--- live fetch test ---"
+          FETCH_OUTPUT=$(git -C "$WORK_DIR" fetch --dry-run origin main 2>&1) && FETCH_STATUS="ok" || FETCH_STATUS="FAILED"
+          echo "fetch dry-run: $FETCH_STATUS"
+          if [ "$FETCH_STATUS" = "FAILED" ]; then
+            echo "$FETCH_OUTPUT"
+          fi
         else
+          GIT_REMOTE_URL="n/a"
+          FETCH_STATUS="n/a"
+          FETCH_OUTPUT=""
           echo "$WORK_DIR is not a git repo (or does not exist yet)"
         fi
         echo "::endgroup::"
@@ -230,12 +253,17 @@ runs:
           --arg disk_free "$(df -h /tmp 2>/dev/null | tail -1 | awk '{print $4}' || echo 'unknown')" \
           --arg mem_used "$(free -m 2>/dev/null | grep Mem | awk '{print $3"/"$2}' || echo 'unknown')" \
           --arg last_fetch "$(stat -c '%y' "$WORK_DIR/.git/FETCH_HEAD" 2>/dev/null || echo 'never')" \
+          --arg git_remote_url "$GIT_REMOTE_URL" \
+          --arg git_extraheader "$(git -C "$WORK_DIR" config --local --get-all http.https://github.com/.extraheader 2>/dev/null && echo 'present' || echo 'none')" \
+          --arg git_origin_main "$(git -C "$WORK_DIR" rev-parse origin/main 2>/dev/null || echo 'unknown')" \
+          --arg git_fetch_test "${FETCH_STATUS:-unknown}" \
+          --arg git_fetch_error "$([ "${FETCH_STATUS:-}" = "FAILED" ] && echo "$FETCH_OUTPUT" || echo '')" \
           --arg env_vars_changed "$([ -f /tmp/wopee_env_initial.txt ] && diff -q /tmp/wopee_env_initial.txt /tmp/wopee_env_pre_exec.txt >/dev/null 2>&1 && echo 'false' || echo 'true')" \
           --arg wopee_env "$(cat /tmp/wopee_env_pre_exec.txt 2>/dev/null || echo '')" \
           --arg github_run_id "${GITHUB_RUN_ID:-unknown}" \
           --arg github_run_url "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-0}" \
           --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          '{timestamp: $timestamp, hostname: $hostname, runner: $runner, github_run_id: $github_run_id, github_run_url: $github_run_url, agent_binary_sha256: $agent_sha, git_head: $head, pkg_version: $pkg_version, lockfile_sha256: $lockfile_sha, playwright: $pw_version, host_uptime_sec: $host_uptime, container_started: $container_started, container_age_sec: $container_age_sec, disk_free: $disk_free, mem_mb: $mem_used, last_git_fetch: $last_fetch, env_vars_changed: $env_vars_changed, wopee_env: $wopee_env}')
+          '{timestamp: $timestamp, hostname: $hostname, runner: $runner, github_run_id: $github_run_id, github_run_url: $github_run_url, agent_binary_sha256: $agent_sha, git_head: $head, git_origin_main: $git_origin_main, git_remote_url: $git_remote_url, git_extraheader: $git_extraheader, git_fetch_test: $git_fetch_test, git_fetch_error: $git_fetch_error, pkg_version: $pkg_version, lockfile_sha256: $lockfile_sha, playwright: $pw_version, host_uptime_sec: $host_uptime, container_started: $container_started, container_age_sec: $container_age_sec, disk_free: $disk_free, mem_mb: $mem_used, last_git_fetch: $last_fetch, env_vars_changed: $env_vars_changed, wopee_env: $wopee_env}')
         echo "$DIAG_JSON"
         echo "::endgroup::"
 
