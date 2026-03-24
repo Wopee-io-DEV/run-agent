@@ -44,7 +44,9 @@ runs:
         echo "::group::Container identity and resources"
         echo "hostname: $(hostname)"
         echo "runner name: ${RUNNER_NAME:-unknown}"
-        echo "container uptime: $(cut -d' ' -f1 /proc/uptime 2>/dev/null || echo 'unknown')s"
+        echo "host uptime: $(cut -d' ' -f1 /proc/uptime 2>/dev/null || echo 'unknown')s"
+        echo "container started: $(stat -c '%y' /proc/1 2>/dev/null || echo 'unknown')"
+        echo "container age: $(( $(date +%s) - $(stat -c '%Y' /proc/1 2>/dev/null || echo 0) ))s"
         echo "disk usage (/tmp): $(df -h /tmp 2>/dev/null | tail -1 || echo 'unknown')"
         echo "memory: $(free -m 2>/dev/null | grep Mem | awk '{print $3"/"$2" MB"}' || echo 'unknown')"
         echo "::endgroup::"
@@ -222,7 +224,9 @@ runs:
           --arg lockfile_sha "$(sha256sum "$WORK_DIR/package-lock.json" 2>/dev/null | cut -d' ' -f1 || echo 'unknown')" \
           --arg pkg_version "$(jq -r '.version // "n/a"' "$WORK_DIR/package.json" 2>/dev/null || echo 'unknown')" \
           --arg pw_version "$(npx playwright --version 2>/dev/null || echo 'unknown')" \
-          --arg uptime "$(cut -d' ' -f1 /proc/uptime 2>/dev/null || echo 'unknown')" \
+          --arg host_uptime "$(cut -d' ' -f1 /proc/uptime 2>/dev/null || echo 'unknown')" \
+          --arg container_started "$(stat -c '%y' /proc/1 2>/dev/null || echo 'unknown')" \
+          --arg container_age_sec "$(( $(date +%s) - $(stat -c '%Y' /proc/1 2>/dev/null || echo 0) ))" \
           --arg disk_free "$(df -h /tmp 2>/dev/null | tail -1 | awk '{print $4}' || echo 'unknown')" \
           --arg mem_used "$(free -m 2>/dev/null | grep Mem | awk '{print $3"/"$2}' || echo 'unknown')" \
           --arg last_fetch "$(stat -c '%y' "$WORK_DIR/.git/FETCH_HEAD" 2>/dev/null || echo 'never')" \
@@ -231,7 +235,7 @@ runs:
           --arg github_run_id "${GITHUB_RUN_ID:-unknown}" \
           --arg github_run_url "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-0}" \
           --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          '{timestamp: $timestamp, hostname: $hostname, runner: $runner, github_run_id: $github_run_id, github_run_url: $github_run_url, agent_binary_sha256: $agent_sha, git_head: $head, pkg_version: $pkg_version, lockfile_sha256: $lockfile_sha, playwright: $pw_version, uptime_sec: $uptime, disk_free: $disk_free, mem_mb: $mem_used, last_git_fetch: $last_fetch, env_vars_changed: $env_vars_changed, wopee_env: $wopee_env}')
+          '{timestamp: $timestamp, hostname: $hostname, runner: $runner, github_run_id: $github_run_id, github_run_url: $github_run_url, agent_binary_sha256: $agent_sha, git_head: $head, pkg_version: $pkg_version, lockfile_sha256: $lockfile_sha, playwright: $pw_version, host_uptime_sec: $host_uptime, container_started: $container_started, container_age_sec: $container_age_sec, disk_free: $disk_free, mem_mb: $mem_used, last_git_fetch: $last_fetch, env_vars_changed: $env_vars_changed, wopee_env: $wopee_env}')
         echo "$DIAG_JSON"
         echo "::endgroup::"
 
