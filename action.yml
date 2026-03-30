@@ -85,6 +85,7 @@ runs:
         fi
 
     - name: Run agent
+      id: run-agent
       shell: bash
       run: |
         # On cancellation/timeout, GitHub sends SIGTERM but skips remaining
@@ -162,7 +163,7 @@ runs:
       run: |
 
         ERROR_FLAG=false
-        if [ "${{ job.status }}" != "success" ]; then
+        if [ "${{ steps.run-agent.outcome }}" != "success" ]; then
           ERROR_FLAG=true
         fi
 
