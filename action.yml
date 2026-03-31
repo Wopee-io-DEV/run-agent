@@ -277,7 +277,7 @@ runs:
         echo "::endgroup::"
 
     - name: Run agent
-      id: run_agent
+      id: run-agent
       shell: bash
       run: |
         env | grep '^WOPEE_' | sort || echo "No WOPEE_ variables found"
@@ -366,7 +366,7 @@ runs:
         printf '%s\n' "${WOPEE_AGENT_REPORT:-}"
     
     - name: Post-process suites if agent did not run
-      if: failure() && steps.run_agent.outcome != 'success'
+      if: failure() && steps.run-agent.outcome != 'success'
       shell: bash
       run: |
         set -euo pipefail
