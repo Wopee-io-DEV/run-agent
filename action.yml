@@ -281,12 +281,54 @@ runs:
       shell: bash
       run: |
         env | grep '^WOPEE_' | sort || echo "No WOPEE_ variables found"
+
+        # On cancellation/timeout, GitHub sends SIGTERM but skips remaining
+        # composite action steps (even with `if: always()`). This trap ensures
+        # CMD is notified so the run doesn't stay "In progress" forever.
+        notify_cmd_on_cancel() {
+          echo "⚠️ Agent process terminated — notifying CMD..."
+
+          if [ "${{ github.event.action }}" = "crawl" ]; then
+            MUTATION="PostProcessAnalysisSuite"
+            INPUT_TYPE="PostProcessAnalysisSuiteInput"
+          else
+            MUTATION="PostProcessAgentSuite"
+            INPUT_TYPE="PostProcessAgentSuiteInput"
+          fi
+
+          JSON_PAYLOAD=$(cat <<-EOF
+          {
+            "query": "mutation ${MUTATION}(\$input: ${INPUT_TYPE}!) { ${MUTATION}(input: \$input) }",
+            "variables": {
+              "input": {
+                "error": true,
+                "projectUuid": "${{ env.WOPEE_PROJECT_UUID }}",
+                "suiteUuid": "${{ env.WOPEE_SUITE_UUID }}"
+              }
+            }
+          }
+        EOF
+          )
+
+          curl --request POST --max-time 10 \
+            --header 'content-type: application/json' \
+            --header 'api_key: ${{ env.WOPEE_API_KEY }}' \
+            --url '${{ env.WOPEE_API_URL }}' \
+            --data "$JSON_PAYLOAD" \
+            2>/dev/null || echo "⚠️ CMD notification failed"
+
+          exit 1
+        }
+        trap notify_cmd_on_cancel SIGTERM SIGINT
+
+        # Run agent in background so the shell stays alive to receive signals.
         if [ "$HEADED" = "true" ] && command -v xvfb-run &>/dev/null; then
           echo "🖥️ Running in headed mode with XVFB"
-          xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' wopee_agent
+          xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' wopee_agent &
         else
-          wopee_agent
+          wopee_agent &
         fi
+        wait $!
 
     - name: Upload test results
       if: always()
@@ -302,7 +344,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-    
+
         REPORT_PATH="${WOPEE_AGENT_WORK_DIR}/test-results/report.md"
         if [ -f "$REPORT_PATH" ]; then
           REPORT_CONTENT="$(cat "$REPORT_PATH")"
