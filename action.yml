@@ -371,6 +371,17 @@ runs:
       run: |
         set -euo pipefail
 
+        # If env loading steps were skipped (early cancellation), extract
+        # critical vars from the event payload. $GITHUB_EVENT_PATH is always available.
+        if [ -z "${WOPEE_API_URL:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
+          echo "Recovering env vars from event payload..."
+          WOPEE_API_URL="$(jq -r '.client_payload.env.WOPEE_API_URL // empty' "$GITHUB_EVENT_PATH" 2>/dev/null)" || true
+          WOPEE_PROJECT_UUID="$(jq -r '.client_payload.env.WOPEE_PROJECT_UUID // empty' "$GITHUB_EVENT_PATH" 2>/dev/null)" || true
+          # WOPEE_SUITE_UUID may come from client_payload.env or client_payload.suite.uuid
+          WOPEE_SUITE_UUID="$(jq -r '.client_payload.env.WOPEE_SUITE_UUID // .client_payload.suite.uuid // empty' "$GITHUB_EVENT_PATH" 2>/dev/null)" || true
+          export WOPEE_API_URL WOPEE_PROJECT_UUID WOPEE_SUITE_UUID
+        fi
+
         if [ -z "${WOPEE_API_URL:-}" ] || [ -z "${WOPEE_API_KEY:-}" ]; then
           echo "WARNING: WOPEE_API_URL or WOPEE_API_KEY is missing; skipping fallback post-process"
           exit 0
