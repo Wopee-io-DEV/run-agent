@@ -366,7 +366,7 @@ runs:
         printf '%s\n' "${WOPEE_AGENT_REPORT:-}"
     
     - name: Post-process suites if agent did not run
-      if: failure() && steps.run-agent.outcome != 'success'
+      if: always() && steps.run-agent.outcome != 'success'
       shell: bash
       run: |
         set -euo pipefail
