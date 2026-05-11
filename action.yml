@@ -296,6 +296,33 @@ runs:
           sleep 0.3
         done
 
+    - name: Resolve interactive endpoints
+      if: env.AGENT_MODE == 'interactive'
+      shell: bash
+      run: |
+        # Compute the public WSS endpoint BEFORE starting the proxy so we
+        # can pass it as --public-ws-endpoint. The standalone viewer
+        # fetches /api/config to discover this URL — without it the
+        # viewer JS can't construct a Traefik-routed wss:// URL from its
+        # own location (different scheme, host, path-prefix).
+        set -euo pipefail
+        RID="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        FQDN="runner.${ENV_SUBDOMAIN}.${DOMAIN}"
+        VIEWER_FQDN="viewer.${ENV_SUBDOMAIN}.${DOMAIN}"
+
+        TARGET_ID=$(curl -s http://127.0.0.1:9222/json/list | jq -r 'map(select(.type=="page")) | .[0].id // empty')
+        [ -z "$TARGET_ID" ] && { echo "::error::No page target found in Chrome CDP"; exit 1; }
+
+        BROWSER_WSS_ENDPOINT="wss://${FQDN}/${RID}/devtools/viewer/${TARGET_ID}"
+        VIEWER_URL="https://${VIEWER_FQDN}/${WOPEE_SUITE_UUID}/"
+
+        echo "RID=${RID}"                                    >> "$GITHUB_ENV"
+        echo "FQDN=${FQDN}"                                  >> "$GITHUB_ENV"
+        echo "VIEWER_FQDN=${VIEWER_FQDN}"                    >> "$GITHUB_ENV"
+        echo "PROXY_TARGET_ID=${TARGET_ID}"                  >> "$GITHUB_ENV"
+        echo "BROWSER_WSS_ENDPOINT=${BROWSER_WSS_ENDPOINT}"  >> "$GITHUB_ENV"
+        echo "VIEWER_URL=${VIEWER_URL}"                      >> "$GITHUB_ENV"
+
     - name: Start CDP session proxy
       if: env.AGENT_MODE == 'interactive'
       shell: bash
@@ -311,6 +338,7 @@ runs:
           --multi-client \
           --viewer-port 9224 \
           --output /tmp/recordings \
+          --public-ws-endpoint "${BROWSER_WSS_ENDPOINT}" \
           >/tmp/proxy.out 2>&1 &
 
         for i in {1..20}; do
@@ -325,9 +353,6 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        RID="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-        FQDN="runner.${ENV_SUBDOMAIN}.${DOMAIN}"
-        VIEWER_FQDN="viewer.${ENV_SUBDOMAIN}.${DOMAIN}"
         IP="$(awk -v h="$(hostname)" '$2==h {print $1; exit}' /etc/hosts || true)"
         [ -z "${IP:-}" ] && { echo "IP unknown" >&2; exit 1; }
         FILE="/dynamic/${RID}.yml"
@@ -391,14 +416,6 @@ runs:
         nohup socat TCP-LISTEN:9224,bind=${IP},fork,reuseaddr,keepalive,nodelay TCP:127.0.0.1:9224 \
           >/tmp/socat-viewer.out 2>&1 &
 
-        TARGET_ID=$(curl -s http://127.0.0.1:9222/json/list | jq -r 'map(select(.type=="page")) | .[0].id // empty')
-        [ -z "$TARGET_ID" ] && { echo "::error::No page target found in Chrome CDP"; exit 1; }
-
-        BROWSER_WSS_ENDPOINT="wss://${FQDN}/${RID}/devtools/viewer/${TARGET_ID}"
-        VIEWER_URL="https://${VIEWER_FQDN}/${WOPEE_SUITE_UUID}/"
-
-        echo "BROWSER_WSS_ENDPOINT=${BROWSER_WSS_ENDPOINT}" >> "$GITHUB_ENV"
-        echo "PROXY_TARGET_ID=${TARGET_ID}" >> "$GITHUB_ENV"
         echo "browser_wss_endpoint=${BROWSER_WSS_ENDPOINT}" >> "$GITHUB_OUTPUT"
         echo "viewer_url=${VIEWER_URL}" >> "$GITHUB_OUTPUT"
         echo "::notice title=Browser WSS::${BROWSER_WSS_ENDPOINT}"
