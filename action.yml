@@ -69,6 +69,20 @@ runs:
         echo "WOPEE_SCREENSHOT_VALIDATION_ENABLED=${WOPEE_SCREENSHOT_VALIDATION_ENABLED:-true}" >> $GITHUB_ENV
         echo "WOPEE_COLLECT_PAGE_CONTENT=${WOPEE_COLLECT_PAGE_CONTENT:-true}" >> $GITHUB_ENV
         echo "WOPEE_AGENT_WORK_DIR=${WOPEE_AGENT_WORK_DIR:-/tmp/agent}" >> $GITHUB_ENV
+        # Bounds on the agent's calls to the Wopee API (backlog#4483). The SDK reads these
+        # through wopee.pw's envConfigAdapter; nothing set them, so every run fell to the
+        # compiled defaults of 180s x 3 attempts = 543s for a single call — LONGER than the
+        # 420s tool watchdog sitting outside it, so the budgets were inverted and the
+        # watchdog fired first on a call the SDK was still willing to wait for.
+        #
+        # 150s x 2 attempts = 301s now fits under the watchdog with 119s to spare, and sits
+        # above the api's own ~125s worst case for visualAssert, so a healthy call is never
+        # cut. Set here rather than in the api's dispatch payload so the agent is
+        # self-bounding with no api release and on every dispatch path — the
+        # client_payload.env step below runs AFTER this one, so an api-supplied value still
+        # wins.
+        echo "WOPEE_API_TIMEOUT_MS=${WOPEE_API_TIMEOUT_MS:-150000}" >> $GITHUB_ENV
+        echo "WOPEE_API_MAX_RETRIES=${WOPEE_API_MAX_RETRIES:-1}" >> $GITHUB_ENV
 
     - name: Load client_payload.env → $GITHUB_ENV
       if: github.event.client_payload.env
