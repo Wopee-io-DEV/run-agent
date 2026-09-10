@@ -337,15 +337,18 @@ runs:
 
         echo "::group::POST diagnostic fingerprint to webhook"
         # Payload contains only redacted env (see the snapshot steps) plus non-secret
-        # fingerprints. Kill switch: set WOPEE_DIAG_WEBHOOK_DISABLED=true on the tenant.
-        if [ "${WOPEE_DIAG_WEBHOOK_DISABLED:-false}" = "true" ]; then
-          echo "Webhook POST skipped (WOPEE_DIAG_WEBHOOK_DISABLED=true)"
+        # fingerprints. Opt-in by destination: nothing is sent unless the runner
+        # supplies WOPEE_DIAG_WEBHOOK_URL, so an environment that must not reach
+        # our cloud (an air-gapped tenant) is off simply by leaving it unset, and
+        # a tenant with its own collector can point this at that instead.
+        if [ -z "${WOPEE_DIAG_WEBHOOK_URL:-}" ]; then
+          echo "Webhook POST skipped (WOPEE_DIAG_WEBHOOK_URL is not set)"
         else
           curl -s -o /dev/null -w "Webhook POST: HTTP %{http_code}\n" \
             --request POST \
             --header "content-type: application/json" \
             --data "$DIAG_JSON" \
-            "https://hub.dev.wopee.io/webhook/cc8ece89-1349-4d95-a214-6e0f37214dca" \
+            "$WOPEE_DIAG_WEBHOOK_URL" \
             || echo "Warning: webhook POST failed"
         fi
         echo "::endgroup::"
