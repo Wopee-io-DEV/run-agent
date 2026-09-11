@@ -603,12 +603,33 @@ runs:
             }'
           )"
         else
+          # A test-case run that ended before its result reached Wopee has no verdict: INCOMPLETE,
+          # not a failure of the product (backlog#4453). The analysis branch above keeps FAILED —
+          # postProcessAnalysisSuite gates on it. Mirrors pw-agent's pool fallback
+          # (agents/pool/postProcessFallback.ts + unconfirmedRunReport): the report may carry a
+          # verdict the agent wrote before it died, so its status lines are rewritten to match
+          # BEFORE the note is appended — a report must not contradict its own status.
+          AGENT_REPORT="${WOPEE_AGENT_REPORT:-}"
+          if [ "${DISABLE_INCOMPLETE_VERDICT:-}" != "true" ]; then
+            AGENT_REPORT_STATUS="INCOMPLETE"
+            AGENT_REPORT="$(printf '%s\n' "$AGENT_REPORT" | sed -E \
+              -e 's/Test Status:[[:space:]]*[^[:alpha:]]*(Passed|Failed|Incomplete)/Test Status: ⚠️ Incomplete/I' \
+              -e 's/\*\*Verdict:[[:space:]]*(PASSED|FAILED|INCOMPLETE)\*\*/**Verdict: INCOMPLETE**/I')"
+            AGENT_REPORT="${AGENT_REPORT}
+
+        ### ⚠️ The run ended before its result reached Wopee
+
+        The agent process stopped — it crashed, was cancelled or ran out of time — before its
+        result was confirmed. The run is therefore recorded as INCOMPLETE: it establishes nothing
+        about the application under test, in either direction."
+          fi
+
           JSON_PAYLOAD="$(jq -n \
             --arg query "$QUERY_AGENT" \
             --arg projectUuid "${WOPEE_PROJECT_UUID:-}" \
             --arg suiteUuid "${WOPEE_SUITE_UUID:-}" \
             --arg identifier "$IDENTIFIER" \
-            --arg agentReport "${WOPEE_AGENT_REPORT:-}" \
+            --arg agentReport "$AGENT_REPORT" \
             --arg agentReportStatus "$AGENT_REPORT_STATUS" \
             --arg agentLog "$AGENT_LOG_JSON" \
             --arg codeSteps "$CODE_STEPS_TEXT" \
