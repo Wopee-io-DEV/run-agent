@@ -357,6 +357,15 @@ runs:
       if: env.AGENT_MODE == 'interactive'
       shell: bash
       run: |
+        # Full Chrome has the password manager's browser UI. After a login whose password
+        # is on a breach list, its "change your password" dialog opens outside the page and
+        # swallows every real mouse click for the rest of the run, while each click still
+        # reports success. No command-line switch turns it off; only the profile preference
+        # does, so seed it before Chrome first reads the profile.
+        mkdir -p /tmp/chrome-cdp/Default
+        echo '{"credentials_enable_service":false,"profile":{"password_manager_enabled":false,"password_manager_leak_detection":false}}' \
+          > /tmp/chrome-cdp/Default/Preferences
+
         nohup chrome \
           --headless=new \
           --ignore-certificate-errors \
