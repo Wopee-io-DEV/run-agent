@@ -140,6 +140,7 @@ runs:
           --retry 2 --retry-delay 2 \
           --header "content-type: application/json" \
           --header "api_key: ${WOPEE_API_KEY}" \
+          --header "x-api-key: ${WOPEE_API_KEY}" \
           --header "projectuuid: ${WOPEE_PROJECT_UUID:-}" \
           --url "${WOPEE_API_URL}" \
           --data "$JSON_PAYLOAD" \
@@ -395,6 +396,7 @@ runs:
         RESPONSE=$(curl -sf -X POST "${WOPEE_API_URL}" \
           -H "Content-Type: application/json" \
           -H "api_key: ${WOPEE_API_KEY}" \
+          -H "x-api-key: ${WOPEE_API_KEY}" \
           -H "projectuuid: ${WOPEE_PROJECT_UUID}" \
           -d '{
             "query": "mutation($input: CreateBrowserSessionInput!) { createBrowserSession(input: $input) { sid agentToken agentRelayUrl viewerRelayUrl } }",
@@ -497,6 +499,7 @@ runs:
             --retry 3 --retry-delay 2 \
             --header 'content-type: application/json' \
             --header 'api_key: ${{ env.WOPEE_API_KEY }}' \
+            --header 'x-api-key: ${{ env.WOPEE_API_KEY }}' \
             --url '${{ env.WOPEE_API_URL }}' \
             --data "$JSON_PAYLOAD" \
             2>/dev/null || echo "⚠️ CMD notification failed"
@@ -664,6 +667,7 @@ runs:
           --retry 3 --retry-delay 2 \
           --header "content-type: application/json" \
           --header "api_key: ${WOPEE_API_KEY}" \
+          --header "x-api-key: ${WOPEE_API_KEY}" \
           --url "${WOPEE_API_URL}" \
           --data "$JSON_PAYLOAD"
 
