@@ -517,6 +517,49 @@ runs:
         fi
         wait $!
 
+    # The run's Playwright trace ships as its OWN artifact (backlog#4643) so CMD's Logs menu can
+    # offer it as a download: the api looks it up by this exact name and hands the browser
+    # GitHub's signed download URL. `archive: false` makes the artifact the zip itself, and it
+    # is MOVED out of test-results, so the runner uploads the same bytes as before, just split.
+    - name: Stage Playwright trace
+      id: stage-trace
+      if: always() && env.WOPEE_EXECUTED_TEST_CASE_UUID != ''
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -euo pipefail
+        UUID="${WOPEE_EXECUTED_TEST_CASE_UUID}"
+        if ! [[ "$UUID" =~ ^[A-Za-z0-9-]+$ ]]; then
+          echo "::warning::Not staging the trace: unexpected executed test case id"
+          exit 0
+        fi
+        # Playwright names the per-test folder after the test; retries are off, so normally one.
+        TRACE=$(find "${WOPEE_AGENT_WORK_DIR:-/tmp/agent}/test-results" -name trace.zip -type f -printf '%T@ %p\n' 2>/dev/null \
+          | sort -rn | head -n1 | cut -d' ' -f2- || true)
+        if [ -z "$TRACE" ]; then
+          echo "No trace.zip recorded for this run"
+          exit 0
+        fi
+        # mv, not cp: the work dir is a RAM-backed tmpfs, and the trace can be hundreds of MB.
+        DEST="${RUNNER_TEMP}/trace-${UUID}-a${GITHUB_RUN_ATTEMPT:-1}.zip"
+        mv "$TRACE" "$DEST"
+        echo "path=$DEST" >> "$GITHUB_OUTPUT"
+        echo "Staged $(du -h "$DEST" | cut -f1) trace as $(basename "$DEST")"
+
+    - name: Upload Playwright trace
+      if: always() && steps.stage-trace.outputs.path != ''
+      # Like the results upload: never fail the run or hold the runner for it.
+      continue-on-error: true
+      timeout-minutes: 15
+      uses: actions/upload-artifact@v7
+      with:
+        path: ${{ steps.stage-trace.outputs.path }}
+        archive: false
+        if-no-files-found: ignore
+        compression-level: 0
+        # Matches pooled runs' stored traces: evidence for a failure someone looks at now.
+        retention-days: 3
+
     - name: Upload test results
       if: always()
       # A failed/slow upload must not fail the run or hold the runner; the agent verdict is already reported.
@@ -526,6 +569,7 @@ runs:
         name: playwright-results
         path: |
           ${{ env.WOPEE_AGENT_WORK_DIR }}/test-results
+          !${{ env.WOPEE_AGENT_WORK_DIR }}/test-results/**/trace.zip
           ${{ env.WOPEE_AGENT_WORK_DIR }}/playwright-report
           !${{ env.WOPEE_AGENT_WORK_DIR }}/playwright-report/data/*.zip
           /tmp/proxy.out
