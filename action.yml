@@ -548,9 +548,10 @@ runs:
 
     - name: Upload Playwright trace
       if: always() && steps.stage-trace.outputs.path != ''
-      # Like the results upload: never fail the run or hold the runner for it.
+      # Like the results upload: never fail the run for it. No per-step timeout here:
+      # composite-action steps do not accept `timeout-minutes` (backlog#4644), so the
+      # calling job's own timeout is the bound, as for the results upload below.
       continue-on-error: true
-      timeout-minutes: 15
       uses: actions/upload-artifact@v7
       with:
         path: ${{ steps.stage-trace.outputs.path }}
