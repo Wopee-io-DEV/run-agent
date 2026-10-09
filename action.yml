@@ -69,7 +69,7 @@ runs:
         echo "WOPEE_SCREENSHOT_VALIDATION_ENABLED=${WOPEE_SCREENSHOT_VALIDATION_ENABLED:-true}" >> $GITHUB_ENV
         echo "WOPEE_COLLECT_PAGE_CONTENT=${WOPEE_COLLECT_PAGE_CONTENT:-true}" >> $GITHUB_ENV
         echo "WOPEE_AGENT_WORK_DIR=${WOPEE_AGENT_WORK_DIR:-/tmp/agent}" >> $GITHUB_ENV
-        # Bounds on the agent's calls to the Wopee API (backlog#4483). The SDK reads these
+        # Bounds on the agent's calls to the Wopee API. The SDK reads these
         # through wopee.pw's envConfigAdapter; nothing set them, so every run fell to the
         # compiled defaults of 180s x 3 attempts = 543s for a single call — LONGER than the
         # 420s tool watchdog sitting outside it, so the budgets were inverted and the
@@ -98,7 +98,7 @@ runs:
             end
         ' "$GITHUB_EVENT_PATH" >> "$GITHUB_ENV"
 
-    # Bind this execution to its Actions run NOW, not at the end (backlog#4382).
+    # Bind this execution to its Actions run NOW, not at the end.
     #
     # The api creates the ExecutedTestCase row before it fires repository_dispatch, but that
     # POST returns 204 with no body — so the api never learns which Actions run picked the
@@ -517,7 +517,7 @@ runs:
         fi
         wait $!
 
-    # The run's Playwright trace ships as its OWN artifact (backlog#4643) so CMD's Logs menu can
+    # The run's Playwright trace ships as its OWN artifact so CMD's Logs menu can
     # offer it as a download: the api looks it up by this exact name and hands the browser
     # GitHub's signed download URL. `archive: false` makes the artifact the zip itself, and it
     # is MOVED out of test-results, so the runner uploads the same bytes as before, just split.
@@ -549,7 +549,7 @@ runs:
     - name: Upload Playwright trace
       if: always() && steps.stage-trace.outputs.path != ''
       # Like the results upload: never fail the run for it. No per-step timeout here:
-      # composite-action steps do not accept `timeout-minutes` (backlog#4644), so the
+      # composite-action steps do not accept `timeout-minutes`, so the
       # calling job's own timeout is the bound, as for the results upload below.
       continue-on-error: true
       uses: actions/upload-artifact@v7
@@ -626,6 +626,23 @@ runs:
         AGENT_LOG_JSON="[]"
         CODE_STEPS_TEXT=""
 
+        # Why the run failed, when the agent recorded it before dying:
+        # pw-agent mirrors it to test-results/run-failure.json, and its pool fallback
+        # already sends it. Only the kinds the api's
+        # FailureKind enum knows; anything else, or no readable file, sends nothing.
+        RUN_FAILURE_FILE="${WOPEE_AGENT_WORK_DIR:-}/test-results/run-failure.json"
+        RUN_FAILURE_JSON="null"
+        if [ -f "$RUN_FAILURE_FILE" ]; then
+          RUN_FAILURE_JSON="$(jq -c '
+            if (.failureKind as $kind | ["URL_UNREACHABLE", "URL_INVALID", "LOGIN_FAILED"] | index([$kind])) != null then
+              {failureKind}
+              + (if (.failureDetail | type) == "string" and .failureDetail != ""
+                 then {failureDetail: .failureDetail[0:500]} else {} end)
+            else null end
+          ' "$RUN_FAILURE_FILE" 2>/dev/null || echo null)"
+          [ -n "$RUN_FAILURE_JSON" ] || RUN_FAILURE_JSON="null"
+        fi
+
         QUERY_ANALYSIS='mutation PostProcessAnalysisSuite($input: PostProcessAnalysisSuiteInput!) { postProcessAnalysisSuite(input: $input) { postProcessing errorMessage } }'
         QUERY_AGENT='mutation PostProcessAgentSuite($input: PostProcessAgentSuiteInput!) { postProcessAgentSuite(input: $input) { postProcessing codeGeneration { status message } testCaseStepsGeneration { status message } errorMessage } }'
 
@@ -659,9 +676,9 @@ runs:
           )"
         else
           # A test-case run that ended before its result reached Wopee has no verdict: INCOMPLETE,
-          # not a failure of the product (backlog#4453). The analysis branch above keeps FAILED —
-          # postProcessAnalysisSuite gates on it. Mirrors pw-agent's pool fallback
-          # (agents/pool/postProcessFallback.ts + unconfirmedRunReport): the report may carry a
+          # not a failure of the product. The analysis branch above keeps FAILED —
+          # postProcessAnalysisSuite gates on it. Mirrors pw-agent's pool fallback:
+          # the report may carry a
           # verdict the agent wrote before it died, so its status lines are rewritten to match
           # BEFORE the note is appended — a report must not contradict its own status.
           AGENT_REPORT="${WOPEE_AGENT_REPORT:-}"
@@ -707,14 +724,34 @@ runs:
           )"
         fi
 
-        curl --fail-with-body --silent --show-error \
-          --request POST --max-time 30 \
-          --retry 3 --retry-delay 2 \
-          --header "content-type: application/json" \
-          --header "api_key: ${WOPEE_API_KEY}" \
-          --header "x-api-key: ${WOPEE_API_KEY}" \
-          --url "${WOPEE_API_URL}" \
-          --data "$JSON_PAYLOAD"
+        post_fallback() {
+          curl --fail-with-body --silent --show-error \
+            --request POST --max-time 30 \
+            --retry 3 --retry-delay 2 \
+            --header "content-type: application/json" \
+            --header "api_key: ${WOPEE_API_KEY}" \
+            --header "x-api-key: ${WOPEE_API_KEY}" \
+            --url "${WOPEE_API_URL}" \
+            --data "$1"
+        }
+
+        if [ "$RUN_FAILURE_JSON" = "null" ]; then
+          post_fallback "$JSON_PAYLOAD"
+        else
+          echo "Sending the run's recorded failure reason: $(jq -r .failureKind <<< "$RUN_FAILURE_JSON")"
+          PAYLOAD_WITH_FAILURE="$(jq -c --argjson failure "$RUN_FAILURE_JSON" '.variables.input += $failure' <<< "$JSON_PAYLOAD")"
+          # An api that predates these fields rejects them, and with them the whole
+          # fallback — the run would never settle. Resend without them, as pw-agent does.
+          if RESPONSE="$(post_fallback "$PAYLOAD_WITH_FAILURE")" && ! grep -q 'failureKind' <<< "$RESPONSE"; then
+            echo "$RESPONSE"
+          elif grep -q 'failureKind' <<< "${RESPONSE:-}"; then
+            echo "API does not accept failureKind yet — resending the fallback without it"
+            post_fallback "$JSON_PAYLOAD"
+          else
+            echo "${RESPONSE:-}"
+            exit 1
+          fi
+        fi
 
     - name: Delete Traefik YAML
       if: always() && env.AGENT_MODE == 'interactive'
