@@ -357,7 +357,19 @@ runs:
         echo '{"credentials_enable_service":false,"profile":{"password_manager_enabled":false,"password_manager_leak_detection":false}}' \
           > /tmp/chrome-cdp/Default/Preferences
 
+        # The project's extra Chromium switches (WOPEE_BROWSER_ARGS, whitespace-separated,
+        # from client_payload.env or .github/workflows/.env) — the same variable pw-agent
+        # gives the fixture browser in headless runs. Read into an array rather than
+        # expanded bare: `--auth-server-allowlist=*` must reach Chrome as written, never
+        # as a glob. They go FIRST: Chrome keeps the last value of a repeated switch, so
+        # the debugging port and profile dir the proxy depends on below always win.
+        read -r -a EXTRA_ARGS <<< "${WOPEE_BROWSER_ARGS:-}"
+        if [ "${#EXTRA_ARGS[@]}" -gt 0 ]; then
+          echo "Extra browser args: ${EXTRA_ARGS[*]}"
+        fi
+
         nohup chrome \
+          "${EXTRA_ARGS[@]}" \
           --headless=new \
           --ignore-certificate-errors \
           --remote-debugging-address=127.0.0.1 \
