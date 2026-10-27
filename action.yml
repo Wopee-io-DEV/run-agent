@@ -151,9 +151,17 @@ runs:
       run: |
         if [ -f .github/workflows/.env ]; then
           # Extract valid KEY=VALUE lines; if none are found, skip without failing the step
-          grep -vE '^(#|$)' .github/workflows/.env | \
-            grep -E '^[A-Za-z_][A-Za-z0-9_]*=' \
-            >> "$GITHUB_ENV" || true
+          lines="$(grep -vE '^(#|$)' .github/workflows/.env | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' || true)"
+          if [ -n "$lines" ]; then
+            printf '%s\n' "$lines" >> "$GITHUB_ENV"
+            # These are the project's own test variables, so a step may reference them as ${KEY}.
+            # The agent resolves only names listed in WOPEE_CUSTOM_VARIABLE_KEYS; add them to it.
+            # Platform settings (WOPEE_*, GITHUB_*, RUNNER_*, ACTIONS_*) are not test variables.
+            keys="$(printf '%s\n' "$lines" | cut -d= -f1 | grep -vE '^(WOPEE_|GITHUB_|RUNNER_|ACTIONS_)' | paste -sd, - || true)"
+            if [ -n "$keys" ]; then
+              echo "WOPEE_CUSTOM_VARIABLE_KEYS=${WOPEE_CUSTOM_VARIABLE_KEYS:+$WOPEE_CUSTOM_VARIABLE_KEYS,}$keys" >> "$GITHUB_ENV"
+            fi
+          fi
         fi
 
     - name: Install dependencies
