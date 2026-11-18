@@ -100,13 +100,19 @@ runs:
           | (.value | tostring | split("\n")[] | select(length > 0))
           | "::add-mask::\(.)"
         ' "$GITHUB_EVENT_PATH"
-        jq -r '
+        # Ordinary names only, and none that steer the runner or the agent's connections. The
+        # delimiter is random so that no value can end its own entry.
+        DELIMITER="WOPEE_$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+        jq -r --arg delimiter "$DELIMITER" '
           .client_payload.env
           | to_entries[]
           | select(.value != null)
-          | if (.value | type=="string" and test("\n"))
-              then "\(.key)<<EOF\n\(.value)\nEOF"
-              else "\(.key)=\(.value)"
+          | select(.key | test("^[A-Za-z_][A-Za-z0-9_]*$"))
+          | select(.key | ascii_upcase | test("^(PATH|HOME|BASH_ENV|ENV|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|WOPEE_API_KEY|WOPEE_AGENT_WORK_DIR|WOPEE_AGENT_REPORT|WOPEE_DIAG_WEBHOOK_URL|WOPEE_CDP_ENDPOINT|WOPEE_CHROME_CDP_URL|AGENT_KEY|BROWSER_WSS_ENDPOINT)$|^(GITHUB|RUNNER|ACTIONS|NODE|LD|DYLD|NPM_CONFIG|SSL|CURL|GIT|LANGFUSE|UPSTREAM)_|^AGENT_.*(URL|ENDPOINT|KEY|SECRET|TOKEN|PROVIDER|CLIENT|PROJECT|LOCATION|RESOURCE)") | not)
+          | (.value | tostring) as $value
+          | if ($value | test("[\r\n]"))
+              then "\(.key)<<\($delimiter)\n\($value)\n\($delimiter)"
+              else "\(.key)=\($value)"
             end
         ' "$GITHUB_EVENT_PATH" >> "$GITHUB_ENV"
 
@@ -199,29 +205,23 @@ runs:
     - name: Set analysis suite parameters & test case to run
       shell: bash
       run: |
-        if [ -n "${{ github.event.client_payload.analysisSuiteUuid }}" ]; then
-          echo "WOPEE_ANALYSIS_SUITE_UUID=${{ github.event.client_payload.analysisSuiteUuid }}" >> $GITHUB_ENV
-        fi
+        # Read from the event file, so that no value becomes part of this script.
+        payload() { jq -r "$1 // empty" "$GITHUB_EVENT_PATH"; }
+        set_env() {
+          [ -n "$2" ] || return 0
+          local delimiter="WOPEE_$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+          printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >> "$GITHUB_ENV"
+        }
 
-        if [ -n "${{ github.event.client_payload.suite.name }}" ]; then
-          echo "WOPEE_SUITE_NAME=${{ github.event.client_payload.suite.name }}" >> $GITHUB_ENV
+        SUITE_UUID="$(payload .client_payload.suite.uuid)"
+        set_env WOPEE_ANALYSIS_SUITE_UUID "$(payload .client_payload.analysisSuiteUuid)"
+        set_env WOPEE_SUITE_NAME "$(payload .client_payload.suite.name)"
+        set_env WOPEE_SUITE_UUID "$SUITE_UUID"
+        if [ "$(payload .action)" = "crawl" ]; then
+          set_env WOPEE_ANALYSIS_SUITE_UUID "$SUITE_UUID"
         fi
-
-        if [ -n "${{ github.event.client_payload.suite.uuid }}" ]; then
-          echo "WOPEE_SUITE_UUID=${{ github.event.client_payload.suite.uuid }}" >> $GITHUB_ENV
-
-          if [ "${{ github.event.action }}" = "crawl" ]; then
-            echo "WOPEE_ANALYSIS_SUITE_UUID=${{ github.event.client_payload.suite.uuid }}" >> $GITHUB_ENV
-          fi
-        fi
-
-        if [ -n "${{ github.event.client_payload.testCase.testCaseId }}" ]; then
-          echo "WOPEE_TEST_CASE_ID=${{ github.event.client_payload.testCase.testCaseId }}" >> $GITHUB_ENV
-        fi
-
-        if [ -n "${{ github.event.client_payload.testCase.userStoryId }}" ]; then
-          echo "WOPEE_USER_STORY_ID=${{ github.event.client_payload.testCase.userStoryId }}" >> $GITHUB_ENV
-        fi
+        set_env WOPEE_TEST_CASE_ID "$(payload .client_payload.testCase.testCaseId)"
+        set_env WOPEE_USER_STORY_ID "$(payload .client_payload.testCase.userStoryId)"
 
     # Windows SSO (backlog#4738). An app whose identity provider answers only
     # `401 Negotiate` needs a Kerberos ticket before any browser starts: on Linux Chromium
@@ -550,7 +550,7 @@ runs:
         notify_cmd_on_cancel() {
           echo "⚠️ Agent process terminated — notifying CMD..."
 
-          if [ "${{ github.event.action }}" = "crawl" ]; then
+          if [ "$(jq -r '.action // empty' "$GITHUB_EVENT_PATH")" = "crawl" ]; then
             MUTATION="PostProcessAnalysisSuite"
             INPUT_TYPE="PostProcessAnalysisSuiteInput"
             SELECTION="{ postProcessing errorMessage }"
@@ -566,8 +566,8 @@ runs:
             "variables": {
               "input": {
                 "error": true,
-                "projectUuid": "${{ env.WOPEE_PROJECT_UUID }}",
-                "suiteUuid": "${{ env.WOPEE_SUITE_UUID }}"
+                "projectUuid": "${WOPEE_PROJECT_UUID}",
+                "suiteUuid": "${WOPEE_SUITE_UUID}"
               }
             }
           }
@@ -577,9 +577,9 @@ runs:
           curl --request POST --max-time 20 \
             --retry 3 --retry-delay 2 \
             --header 'content-type: application/json' \
-            --header 'api_key: ${{ env.WOPEE_API_KEY }}' \
-            --header 'x-api-key: ${{ env.WOPEE_API_KEY }}' \
-            --url '${{ env.WOPEE_API_URL }}' \
+            --header "api_key: ${WOPEE_API_KEY}" \
+            --header "x-api-key: ${WOPEE_API_KEY}" \
+            --url "${WOPEE_API_URL}" \
             --data "$JSON_PAYLOAD" \
             2>/dev/null || echo "⚠️ CMD notification failed"
 
@@ -674,10 +674,11 @@ runs:
           echo "⚠️ $REPORT_CONTENT"
         fi
 
+        DELIMITER="WOPEE_$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
         {
-          echo "WOPEE_AGENT_REPORT<<EOF"
+          echo "WOPEE_AGENT_REPORT<<$DELIMITER"
           echo "$REPORT_CONTENT"
-          echo "EOF"
+          echo "$DELIMITER"
         } >> "$GITHUB_ENV"
 
     - name: Post-process suites if agent did not run
@@ -732,7 +733,7 @@ runs:
           HAS_IDENTIFIER=true
         fi
 
-        if [ "${{ github.event.action }}" = "crawl" ] || [ "$HAS_IDENTIFIER" != "true" ]; then
+        if [ "$(jq -r '.action // empty' "$GITHUB_EVENT_PATH")" = "crawl" ] || [ "$HAS_IDENTIFIER" != "true" ]; then
           JSON_PAYLOAD="$(jq -n \
             --arg query "$QUERY_ANALYSIS" \
             --arg projectUuid "${WOPEE_PROJECT_UUID:-}" \
