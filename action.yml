@@ -472,7 +472,9 @@ runs:
         TARGET_ID=$(curl -s http://127.0.0.1:9222/json/list | jq -r 'map(select(.type=="page")) | .[0].id // empty')
         [ -z "$TARGET_ID" ] && { echo "::error::No page target found in Chrome CDP"; exit 1; }
 
-        RESPONSE=$(curl -sf -X POST "${WOPEE_API_URL}" \
+        # No --fail: the api answers a refused WOPEE_API_KEY with HTTP 401 and says why in the
+        # body, which the check below prints.
+        RESPONSE=$(curl -sS -X POST "${WOPEE_API_URL}" \
           -H "Content-Type: application/json" \
           -H "api_key: ${WOPEE_API_KEY}" \
           -H "x-api-key: ${WOPEE_API_KEY}" \
@@ -487,12 +489,15 @@ runs:
             }
           }')
 
-        SID=$(echo "$RESPONSE" | jq -r '.data.createBrowserSession.sid')
-        AGENT_TOKEN=$(echo "$RESPONSE" | jq -r '.data.createBrowserSession.agentToken')
-        AGENT_RELAY_URL=$(echo "$RESPONSE" | jq -r '.data.createBrowserSession.agentRelayUrl')
-        VIEWER_RELAY_URL=$(echo "$RESPONSE" | jq -r '.data.createBrowserSession.viewerRelayUrl')
-
-        [ "$SID" = "null" ] && { echo "::error::Failed to create browser session: $(echo $RESPONSE | jq -r '.errors[0].message // "unknown"')"; exit 1; }
+        SID=$(jq -r '.data.createBrowserSession.sid // empty' <<< "$RESPONSE" 2>/dev/null || true)
+        if [ -z "$SID" ]; then
+          MESSAGE=$(jq -r '.errors[0].message // empty' <<< "$RESPONSE" 2>/dev/null || true)
+          echo "::error::Failed to create browser session: ${MESSAGE:-unexpected answer: ${RESPONSE:0:300}}"
+          exit 1
+        fi
+        AGENT_TOKEN=$(jq -r '.data.createBrowserSession.agentToken' <<< "$RESPONSE")
+        AGENT_RELAY_URL=$(jq -r '.data.createBrowserSession.agentRelayUrl' <<< "$RESPONSE")
+        VIEWER_RELAY_URL=$(jq -r '.data.createBrowserSession.viewerRelayUrl' <<< "$RESPONSE")
 
         echo "PROXY_TARGET_ID=${TARGET_ID}" >> "$GITHUB_ENV"
         echo "CDP_SESSION_SID=${SID}" >> "$GITHUB_ENV"
